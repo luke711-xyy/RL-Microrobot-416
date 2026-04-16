@@ -353,11 +353,10 @@ class swimmer_gym(MultiAgentEnv):
     def _sanitize_low_level_action(self, state, action):
         action = np.asarray(action, dtype=np.float64)
         clipped = np.clip(action, ACTION_LOW, ACTION_HIGH)
-        state_predict = state.copy()
-        state_predict[3:] += clipped * 0.2
-        if np.any(np.abs(state_predict[3:]) > self.betamax):
-            return np.zeros_like(clipped)
-        return clipped
+        # 逐关节裁剪：每个铰链角独立限制在 [-betamax, betamax]
+        predicted = state[3:] + clipped * 0.2
+        safe = np.clip(predicted, -self.betamax, self.betamax)
+        return (safe - state[3:]) / 0.2
 
     def _compute_low_level_action(self, robot_idx, strategy_order):
         if self.skip_policy_load:
