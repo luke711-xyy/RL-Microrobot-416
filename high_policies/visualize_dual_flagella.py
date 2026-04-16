@@ -254,13 +254,26 @@ def render_frame(
         trace2.append(centroid2)
 
     ax.clear()
+
+    # 浓度场等高线（同心圆热力图）
+    view_cx = 0.5 * (centroid1[0] + centroid2[0])
+    view_cy = 0.5 * (centroid1[1] + centroid2[1])
+    vr = ARGS.view_range
+    grid_x = np.linspace(view_cx - vr, view_cx + vr, 120)
+    grid_y = np.linspace(view_cy - vr, view_cy + vr, 120)
+    gx, gy = np.meshgrid(grid_x, grid_y)
+    con_field = 1.0 / np.sqrt((gx - CCENTER_X) ** 2 + (gy - CCENTER_Y) ** 2)
+    ax.contourf(gx, gy, con_field, levels=20, cmap="YlOrRd", alpha=0.3)
+    ax.contour(gx, gy, con_field, levels=8, colors="orange", alpha=0.4, linewidths=0.5)
+
+    # 机器人身体
     ax.plot(frame["xy1"][:, 0], frame["xy1"][:, 1], color="tab:blue", linewidth=2.5)
     ax.plot(frame["xy2"][:, 0], frame["xy2"][:, 1], color="tab:red", linewidth=2.5)
     ax.scatter([centroid1[0]], [centroid1[1]], color="tab:blue", s=40)
     ax.scatter([centroid2[0]], [centroid2[1]], color="tab:red", s=40)
 
-    # 化学源
-    ax.scatter([CCENTER_X], [CCENTER_Y], color="gold", s=120, marker="*", edgecolors="black", label="Chem Source")
+    # 化学源标记
+    ax.scatter([CCENTER_X], [CCENTER_Y], color="gold", s=150, marker="*", edgecolors="black", zorder=10)
 
     if len(trace1) > 1:
         trace1_np = np.array(trace1)
