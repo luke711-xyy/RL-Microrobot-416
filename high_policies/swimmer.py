@@ -532,9 +532,6 @@ class swimmer_gym(MultiAgentEnv):
 
         self._record_macro_step()
 
-        if self.ep_step >= self.macro_horizon:
-            self.done = True
-
         obs = self._get_obs()
         rewards = {
             ROBOT_IDS[0]: float(reward1),
@@ -559,7 +556,26 @@ class swimmer_gym(MultiAgentEnv):
         return obs, rewards, dones, infos
 
     def reset(self):
-        self._build_initial_geometry()
+        if self.episode_count == 0:
+            self._build_initial_geometry()
+        else:
+            # reset-free：不重置位置，只重选 order
+            con1_arr = compute_concentration(self.XY_positions1)
+            if con1_arr[0] <= con1_arr[-1]:
+                self.order1 = np.random.randint(3)
+            else:
+                self.order1 = np.random.randint(3) + 3
+
+            con2_arr = compute_concentration(self.XY_positions2)
+            if con2_arr[0] <= con2_arr[-1]:
+                self.order2 = np.random.randint(3)
+            else:
+                self.order2 = np.random.randint(3) + 3
+
+            self.con1 = float(np.sum(compute_concentration(self.XY_positions1)))
+            self.con2 = float(np.sum(compute_concentration(self.XY_positions2)))
+            self.last_robot_orders = [self.order1, self.order2]
+
         self.reward = 0.0
         self.done = False
         self.ep_step = 0
