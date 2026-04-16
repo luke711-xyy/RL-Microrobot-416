@@ -402,8 +402,8 @@ def main():
 
         print(
             f"  [{i + 1:>4d}/{ARGS.steps}] "
-            f"R1: {strategy_pair[0]}, rwd={env.last_robot_rewards[0]:>8.2f}, con={env.con1:.4f} | "
-            f"R2: {strategy_pair[1]}, rwd={env.last_robot_rewards[1]:>8.2f}, con={env.con2:.4f}"
+            f"R1: aprm={env.aprm1}->order={env.order1}({strategy_pair[0]}), rwd={env.last_robot_rewards[0]:>8.2f}, con={env.con1:.4f} | "
+            f"R2: aprm={env.aprm2}->order={env.order2}({strategy_pair[1]}), rwd={env.last_robot_rewards[1]:>8.2f}, con={env.con2:.4f}"
         )
 
         obs_dict = next_obs

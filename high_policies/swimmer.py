@@ -97,6 +97,22 @@ def compute_concentration(xy_positions, cx=CCENTER_X, cy=CCENTER_Y):
     return 1.0 / np.sqrt(dx ** 2 + dy ** 2)
 
 
+def coarse_select_order(xy_positions, cx=CCENTER_X, cy=CCENTER_Y):
+    """论文粗选：比较前端 tip 和后端 tip 的浓度，从对应候选集中随机选一个。
+    前端浓度 >= 后端 → {0,1,2} (头朝前策略)
+    前端浓度 <  后端 → {3,4,5} (尾朝前策略)
+    """
+    link_pos = subsample_link_positions(xy_positions)
+    rear_tip = link_pos[0]
+    front_tip = link_pos[-1]
+    c_front = 1.0 / np.sqrt((front_tip[0] - cx) ** 2 + (front_tip[1] - cy) ** 2)
+    c_rear = 1.0 / np.sqrt((rear_tip[0] - cx) ** 2 + (rear_tip[1] - cy) ** 2)
+    if c_front >= c_rear:
+        return np.random.randint(3)        # {0, 1, 2}
+    else:
+        return np.random.randint(3) + 3    # {3, 4, 5}
+
+
 def transform_obs_for_strategy(hinge_angles, order):
     """按 order 变换铰链角观测（喂给底层策略前）"""
     obs = hinge_angles.copy()
@@ -228,9 +244,9 @@ class swimmer_gym(MultiAgentEnv):
         self.betamax = (2 * math.pi) / ENV_LINK_NUM
         self.betamin = -self.betamax * 0.5
 
-        # 动作：Discrete(3) = order 的相对变化 (-1, 0, +1)
+        # 动作：Discrete(3) = RL 微调 aadj ∈ {-1, 0, +1}
         self.action_space = spaces.Discrete(3)
-        # 观测：Discrete(6) = 当前 order
+        # 观测：Discrete(6) = 粗选出的 aprm
         self.observation_space = spaces.Discrete(NUM_STRATEGIES)
 
         self.low_level_policies = {}
@@ -245,10 +261,12 @@ class swimmer_gym(MultiAgentEnv):
         self.reward = 0.0
         self.done = False
 
-        # 每个机器人独立的策略 order 和浓度
-        self.order1 = 1
+        # 每个机器人独立的状态
+        self.order1 = 1          # 实际执行的 order (aprm + aadj)
         self.order2 = 1
-        self.con1 = 0.0
+        self.aprm1 = 1           # 粗选结果（作为 RL 观测）
+        self.aprm2 = 1
+        self.con1 = 0.0          # 铰链平均浓度
         self.con2 = 0.0
 
         # 跟踪变量（用于日志和可视化）
@@ -301,22 +319,15 @@ class swimmer_gym(MultiAgentEnv):
         self.trace1.append(np.array(centroid1))
         self.trace2.append(np.array(centroid2))
 
-        # 初始化浓度
-        self.con1 = float(np.sum(compute_concentration(self.XY_positions1)))
-        self.con2 = float(np.sum(compute_concentration(self.XY_positions2)))
+        # 初始化铰链平均浓度
+        self.con1 = float(np.mean(compute_concentration(self.XY_positions1)))
+        self.con2 = float(np.mean(compute_concentration(self.XY_positions2)))
 
-        # 根据头/尾端浓度选初始 order
-        con1_arr = compute_concentration(self.XY_positions1)
-        if con1_arr[0] <= con1_arr[-1]:
-            self.order1 = np.random.randint(3)
-        else:
-            self.order1 = np.random.randint(3) + 3
-
-        con2_arr = compute_concentration(self.XY_positions2)
-        if con2_arr[0] <= con2_arr[-1]:
-            self.order2 = np.random.randint(3)
-        else:
-            self.order2 = np.random.randint(3) + 3
+        # 粗选初始 order
+        self.aprm1 = coarse_select_order(self.XY_positions1)
+        self.aprm2 = coarse_select_order(self.XY_positions2)
+        self.order1 = self.aprm1
+        self.order2 = self.aprm2
 
         self.last_robot_rewards = [0.0, 0.0]
         self.last_robot_orders = [self.order1, self.order2]
@@ -345,9 +356,10 @@ class swimmer_gym(MultiAgentEnv):
             self.low_level_policies[policy_name] = restore_policy(ckpt_path)
 
     def _get_obs(self):
+        """观测 = 粗选出的 aprm（论文设计：RL 只看到粗选结果，决定如何微调）"""
         return {
-            ROBOT_IDS[0]: self.order1,
-            ROBOT_IDS[1]: self.order2,
+            ROBOT_IDS[0]: self.aprm1,
+            ROBOT_IDS[1]: self.aprm2,
         }
 
     def _sanitize_low_level_action(self, state, action):
@@ -485,12 +497,16 @@ class swimmer_gym(MultiAgentEnv):
         self.reward = 0.0
         self.done = False
 
-        # 动作解码：相对 order 变化 (action: 0=-1, 1=0, 2=+1)
+        # ========== 论文两步法：粗选 + RL 微调 ==========
+        # 上一步（或 reset）已粗选出 aprm1/aprm2 并作为观测返回给 RL
+        # RL 返回 aadj ∈ {0,1,2} 映射到 {-1, 0, +1}
         action_dict = action_dict or {}
-        a1 = int(action_dict.get(ROBOT_IDS[0], 1))
-        a2 = int(action_dict.get(ROBOT_IDS[1], 1))
-        self.order1 = (self.order1 + a1 - 1) % NUM_STRATEGIES
-        self.order2 = (self.order2 + a2 - 1) % NUM_STRATEGIES
+        aadj1 = int(action_dict.get(ROBOT_IDS[0], 1)) - 1   # {-1, 0, +1}
+        aadj2 = int(action_dict.get(ROBOT_IDS[1], 1)) - 1
+
+        # 微调: a'prm = (aprm + aadj) % 6
+        self.order1 = (self.aprm1 + aadj1 + NUM_STRATEGIES) % NUM_STRATEGIES
+        self.order2 = (self.aprm2 + aadj2 + NUM_STRATEGIES) % NUM_STRATEGIES
         self.last_robot_orders = [self.order1, self.order2]
 
         self.last_substep_frames = []
@@ -503,9 +519,9 @@ class swimmer_gym(MultiAgentEnv):
             self.low_level_step_count += 1
             self.last_substep_frames.append(self._capture_substep_frame(substep_index + 1))
 
-        # 浓度奖励
-        con1_new = float(np.sum(compute_concentration(self.XY_positions1)))
-        con2_new = float(np.sum(compute_concentration(self.XY_positions2)))
+        # 奖励：铰链平均浓度变化量 × 缩放系数（论文: hinge-averaged concentration）
+        con1_new = float(np.mean(compute_concentration(self.XY_positions1)))
+        con2_new = float(np.mean(compute_concentration(self.XY_positions2)))
         reward1 = (con1_new - self.con1) * CON_REWARD_SCALE
         reward2 = (con2_new - self.con2) * CON_REWARD_SCALE
         self.con1 = con1_new
@@ -520,18 +536,23 @@ class swimmer_gym(MultiAgentEnv):
 
         self.last_robot_rewards = [reward1, reward2]
 
+        # ========== 为下一步做新的粗选 ==========
+        self.aprm1 = coarse_select_order(self.XY_positions1)
+        self.aprm2 = coarse_select_order(self.XY_positions2)
+
         print(
             f"[Macro {self.ep_step:>3d}] "
-            f"R1: order={self.order1}({STRATEGY_NAMES[self.order1]}), "
+            f"R1: aprm={self.aprm1}→order={self.order1}({STRATEGY_NAMES[self.order1]}), "
             f"reward={reward1:>8.4f}, con={self.con1:>8.4f}, "
             f"pos=({centroid1[0]:>8.4f}, {centroid1[1]:>8.4f}) | "
-            f"R2: order={self.order2}({STRATEGY_NAMES[self.order2]}), "
+            f"R2: aprm={self.aprm2}→order={self.order2}({STRATEGY_NAMES[self.order2]}), "
             f"reward={reward2:>8.4f}, con={self.con2:>8.4f}, "
             f"pos=({centroid2[0]:>8.4f}, {centroid2[1]:>8.4f})"
         )
 
         self._record_macro_step()
 
+        # 观测 = 新粗选结果（下一步 RL 用来决定微调方向）
         obs = self._get_obs()
         rewards = {
             ROBOT_IDS[0]: float(reward1),
@@ -543,12 +564,14 @@ class swimmer_gym(MultiAgentEnv):
             ROBOT_IDS[0]: {
                 "reward": float(reward1),
                 "concentration": float(self.con1),
+                "aprm": int(self.aprm1),
                 "order": int(self.order1),
                 "strategy": STRATEGY_NAMES[self.order1],
             },
             ROBOT_IDS[1]: {
                 "reward": float(reward2),
                 "concentration": float(self.con2),
+                "aprm": int(self.aprm2),
                 "order": int(self.order2),
                 "strategy": STRATEGY_NAMES[self.order2],
             },
@@ -559,21 +582,13 @@ class swimmer_gym(MultiAgentEnv):
         if self.episode_count == 0:
             self._build_initial_geometry()
         else:
-            # reset-free：不重置位置，只重选 order
-            con1_arr = compute_concentration(self.XY_positions1)
-            if con1_arr[0] <= con1_arr[-1]:
-                self.order1 = np.random.randint(3)
-            else:
-                self.order1 = np.random.randint(3) + 3
-
-            con2_arr = compute_concentration(self.XY_positions2)
-            if con2_arr[0] <= con2_arr[-1]:
-                self.order2 = np.random.randint(3)
-            else:
-                self.order2 = np.random.randint(3) + 3
-
-            self.con1 = float(np.sum(compute_concentration(self.XY_positions1)))
-            self.con2 = float(np.sum(compute_concentration(self.XY_positions2)))
+            # reset-free：不重置位置，只重新粗选 + 更新浓度
+            self.aprm1 = coarse_select_order(self.XY_positions1)
+            self.aprm2 = coarse_select_order(self.XY_positions2)
+            self.order1 = self.aprm1
+            self.order2 = self.aprm2
+            self.con1 = float(np.mean(compute_concentration(self.XY_positions1)))
+            self.con2 = float(np.mean(compute_concentration(self.XY_positions2)))
             self.last_robot_orders = [self.order1, self.order2]
 
         self.reward = 0.0
