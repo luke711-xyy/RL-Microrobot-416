@@ -1,11 +1,7 @@
 import argparse
 import os
 import sys
-import time
-import traceback
 from pathlib import Path
-from queue import Full, Queue
-from threading import Event, Thread
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -30,18 +26,6 @@ def parse_args():
         "--reset_free_playback",
         action="store_true",
         help="Continue visualization across episode boundaries without resetting robot geometry",
-    )
-    parser.add_argument(
-        "--prefetch_queue_size",
-        type=int,
-        default=10,
-        help="Maximum number of precomputed macro-step packages kept in the queue (default: 10)",
-    )
-    parser.add_argument(
-        "--prefetch_warmup_steps",
-        type=int,
-        default=10,
-        help="Number of macro-step packages to preload before playback starts (default: 10)",
     )
     parser.add_argument(
         "--explore",
@@ -368,79 +352,6 @@ def rollover_env_without_geometry_reset(env):
     env.episode_count += 1
 
 
-def producer_loop(policy, env, initial_obs, output_queue, stop_event, total_steps):
-    obs_dict = initial_obs
-    produced = 0
-    try:
-        while produced < total_steps and not stop_event.is_set():
-            package = compute_macro_package(policy, env, obs_dict)
-            while not stop_event.is_set():
-                try:
-                    output_queue.put(package, timeout=0.1)
-                    break
-                except Full:
-                    continue
-            if stop_event.is_set():
-                break
-            produced += 1
-            obs_dict = package["next_obs"]
-            if package["done"]:
-                if ARGS.reset_free_playback:
-                    rollover_env_without_geometry_reset(env)
-                    obs_dict = env._get_obs()
-                else:
-                    obs_dict = env.reset()
-    except Exception:
-        error_package = {
-            "error": True,
-            "traceback": traceback.format_exc(),
-        }
-        while not stop_event.is_set():
-            try:
-                output_queue.put(error_package, timeout=0.1)
-                break
-            except Full:
-                continue
-    finally:
-        sentinel = {"done_producing": True}
-        while not stop_event.is_set():
-            try:
-                output_queue.put(sentinel, timeout=0.1)
-                break
-            except Full:
-                continue
-
-
-def wait_for_queue_warmup(fig, ax, env, trace1, trace2, package_queue, warmup_steps, producer):
-    last_ui_update = 0.0
-    while package_queue.qsize() < warmup_steps and producer.is_alive():
-        if not plt.fignum_exists(fig.number):
-            return False
-
-        now = time.time()
-        if now - last_ui_update >= 0.05:
-            render_frame(
-                ax,
-                capture_env_frame(env, substep_index=0),
-                trace1,
-                trace2,
-                macro_index=0,
-                strategy_pair=(STRATEGY_NAMES[env.order1], STRATEGY_NAMES[env.order2]),
-                total_substeps=max(1, env.low_level_hold_steps),
-                robot_rewards=env.last_robot_rewards,
-                robot_concentrations=[env.con1, env.con2],
-                robot_orders=[env.order1, env.order2],
-                queue_fill=package_queue.qsize(),
-                queue_capacity=max(1, ARGS.prefetch_queue_size),
-                append_trace=True,
-            )
-            fig.canvas.draw()
-            fig.canvas.flush_events()
-            last_ui_update = now
-        plt.pause(0.05)
-    return True
-
-
 def main():
     if ray.is_initialized():
         ray.shutdown()
@@ -465,79 +376,60 @@ def main():
     shared_policy = agent.get_policy(SHARED_POLICY_ID)
     if shared_policy is None:
         raise RuntimeError(f"Shared policy '{SHARED_POLICY_ID}' not found in checkpoint")
-    print(">>> Checkpoint restore succeeded. Launching visualization window...")
+    print(">>> Checkpoint restore succeeded.")
 
+    # ================= 阶段 1：预计算所有 macro step =================
+    print(f">>> Precomputing {ARGS.steps} macro steps (this may take a while)...")
+    all_packages = []
+    for i in range(ARGS.steps):
+        action_dict = {}
+        for robot_id in ROBOT_IDS:
+            action_id = compute_agent_action(shared_policy, obs_dict[robot_id], explore=ARGS.explore)
+            action_dict[robot_id] = action_id
+
+        next_obs, reward_dict, done_dict, _ = env.step(action_dict)
+        frames = env.last_substep_frames if env.last_substep_frames else [capture_env_frame(env, env.low_level_hold_steps)]
+        strategy_pair = (STRATEGY_NAMES[env.order1], STRATEGY_NAMES[env.order2])
+
+        package = {
+            "frames": frames,
+            "strategy_pair": strategy_pair,
+            "robot_rewards": list(env.last_robot_rewards),
+            "robot_concentrations": [env.con1, env.con2],
+            "robot_orders": [env.order1, env.order2],
+        }
+        all_packages.append(package)
+
+        print(
+            f"  [{i + 1:>4d}/{ARGS.steps}] "
+            f"R1: {strategy_pair[0]}, rwd={env.last_robot_rewards[0]:>8.2f}, con={env.con1:.4f} | "
+            f"R2: {strategy_pair[1]}, rwd={env.last_robot_rewards[1]:>8.2f}, con={env.con2:.4f}"
+        )
+
+        obs_dict = next_obs
+        if done_dict["__all__"]:
+            if ARGS.reset_free_playback:
+                rollover_env_without_geometry_reset(env)
+                obs_dict = env._get_obs()
+            else:
+                obs_dict = env.reset()
+
+    print(f">>> Precomputation done. {len(all_packages)} macro steps ready. Launching playback...")
+
+    # ================= 阶段 2：流畅回放 =================
     plt.ion()
     fig, ax = plt.subplots(figsize=(8, 8))
-
     trace1 = []
     trace2 = []
-    initial_frame = capture_env_frame(env, substep_index=0)
-    render_frame(
-        ax,
-        initial_frame,
-        trace1,
-        trace2,
-        macro_index=0,
-        strategy_pair=(STRATEGY_NAMES[env.order1], STRATEGY_NAMES[env.order2]),
-        total_substeps=1,
-        robot_rewards=env.last_robot_rewards,
-        robot_concentrations=[env.con1, env.con2],
-        robot_orders=[env.order1, env.order2],
-        queue_fill=0,
-        queue_capacity=max(1, ARGS.prefetch_queue_size),
-    )
-    fig.canvas.draw()
-    fig.canvas.flush_events()
-    plt.pause(ARGS.speed)
-
-    preload_size = max(1, ARGS.prefetch_queue_size)
-    package_queue = Queue(maxsize=preload_size)
-    stop_event = Event()
-    producer = Thread(
-        target=producer_loop,
-        args=(shared_policy, env, obs_dict, package_queue, stop_event, ARGS.steps),
-        daemon=True,
-    )
-    producer.start()
-    macro_index = 0
-
-    warmup_steps = min(max(1, ARGS.prefetch_warmup_steps), preload_size, ARGS.steps)
-    print(
-        f">>> Warming up playback queue: target {warmup_steps} macro steps "
-        f"(queue size {preload_size})"
-    )
-    keep_open = wait_for_queue_warmup(fig, ax, env, trace1, trace2, package_queue, warmup_steps, producer)
-    if not keep_open:
-        stop_event.set()
-        producer.join(timeout=2.0)
-        plt.ioff()
-        return
-
-    if package_queue.qsize() > 0:
-        print(f">>> Playback queue warmup complete: {package_queue.qsize()} macro steps buffered")
 
     try:
-        while macro_index < ARGS.steps:
-            package = package_queue.get()
-            if package.get("error"):
-                raise RuntimeError(package["traceback"])
-            if package.get("done_producing"):
-                break
-
-            macro_index += 1
+        for macro_index, package in enumerate(all_packages, start=1):
             strategy_pair = package["strategy_pair"]
-            r1 = package["robot_rewards"][0]
-            r2 = package["robot_rewards"][1]
 
-            print(
-                f"[Macro {macro_index:>3d}] "
-                f"R1: {strategy_pair[0]}, reward={r1:.4f}, con={package['robot_concentrations'][0]:.4f} | "
-                f"R2: {strategy_pair[1]}, reward={r2:.4f}, con={package['robot_concentrations'][1]:.4f}"
-            )
-
-            should_stop = False
             for frame in package["frames"]:
+                if not plt.fignum_exists(fig.number):
+                    raise KeyboardInterrupt
+
                 render_frame(
                     ax,
                     frame,
@@ -549,23 +441,17 @@ def main():
                     robot_rewards=package["robot_rewards"],
                     robot_concentrations=package["robot_concentrations"],
                     robot_orders=package["robot_orders"],
-                    queue_fill=package_queue.qsize(),
-                    queue_capacity=preload_size,
+                    queue_fill=len(all_packages) - macro_index,
+                    queue_capacity=len(all_packages),
                 )
                 fig.canvas.draw()
                 fig.canvas.flush_events()
                 plt.pause(ARGS.speed)
 
-                if not plt.fignum_exists(fig.number):
-                    should_stop = True
-                    break
+    except KeyboardInterrupt:
+        print("\nPlayback interrupted.")
 
-            if should_stop:
-                break
-    finally:
-        stop_event.set()
-        producer.join(timeout=2.0)
-
+    print("Playback finished. Close the window to exit.")
     plt.ioff()
     plt.show()
 
