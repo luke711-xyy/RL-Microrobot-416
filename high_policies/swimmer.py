@@ -79,10 +79,21 @@ def compute_average_heading(state_array):
     return angle_sum / (len(state_array) - 2)
 
 
+def subsample_link_positions(xy_positions):
+    """从 Stokeslet 离散点 (N+1) 中取出 NL+1 个链节位置，保证和 reset 时点数一致"""
+    n_pts = xy_positions.shape[0]
+    if n_pts == ENV_LINK_NUM + 1:
+        return xy_positions
+    step = (n_pts - 1) // ENV_LINK_NUM
+    indices = [step * i for i in range(ENV_LINK_NUM)] + [n_pts - 1]
+    return xy_positions[indices]
+
+
 def compute_concentration(xy_positions, cx=CCENTER_X, cy=CCENTER_Y):
-    """计算各链节处的化学浓度 (1/距离)"""
-    dx = xy_positions[:, 0] - cx
-    dy = xy_positions[:, 1] - cy
+    """计算各链节处的化学浓度 (1/距离)，始终在 NL+1 个链节位置上计算"""
+    link_pos = subsample_link_positions(xy_positions)
+    dx = link_pos[:, 0] - cx
+    dy = link_pos[:, 1] - cy
     return 1.0 / np.sqrt(dx ** 2 + dy ** 2)
 
 
