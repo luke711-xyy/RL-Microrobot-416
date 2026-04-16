@@ -43,6 +43,11 @@ def parse_args():
         default=10,
         help="Number of macro-step packages to preload before playback starts (default: 10)",
     )
+    parser.add_argument(
+        "--explore",
+        action="store_true",
+        help="Enable exploration noise (see strategy switching even with under-trained policies)",
+    )
     return parser.parse_args()
 
 
@@ -319,12 +324,12 @@ def render_frame(
     ax.set_title("Dual Flagella Chemotaxis Visualization")
 
 
-def compute_agent_action(policy, obs):
+def compute_agent_action(policy, obs, explore=False):
     # Discrete(6) 观测需要手动 one-hot，因为直接调用 policy 不经过 RLlib 预处理器
     if isinstance(obs, (int, np.integer)):
         obs = np.eye(NUM_STRATEGIES, dtype=np.float32)[obs]
     try:
-        action_output = policy.compute_single_action(obs, explore=False)
+        action_output = policy.compute_single_action(obs, explore=explore)
     except TypeError:
         action_output = policy.compute_single_action(obs)
     action = int(unpack_action_output(action_output))
@@ -334,7 +339,7 @@ def compute_agent_action(policy, obs):
 def compute_macro_package(policy, env, obs_dict):
     action_dict = {}
     for robot_id in ROBOT_IDS:
-        action_id = compute_agent_action(policy, obs_dict[robot_id])
+        action_id = compute_agent_action(policy, obs_dict[robot_id], explore=ARGS.explore)
         action_dict[robot_id] = action_id
 
     next_obs, reward_dict, done_dict, _ = env.step(action_dict)
