@@ -307,6 +307,9 @@ def render_frame(
 
 
 def compute_agent_action(policy, obs):
+    # Discrete(6) 观测需要手动 one-hot，因为直接调用 policy 不经过 RLlib 预处理器
+    if isinstance(obs, (int, np.integer)):
+        obs = np.eye(NUM_STRATEGIES, dtype=np.float32)[obs]
     try:
         action_output = policy.compute_single_action(obs, explore=False)
     except TypeError:
