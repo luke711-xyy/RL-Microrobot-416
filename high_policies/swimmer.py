@@ -238,6 +238,7 @@ class swimmer_gym(MultiAgentEnv):
         self.low_level_hold_steps = int(env_config.get("low_level_hold_steps", LOW_LEVEL_HOLD_STEPS))
         self.macro_horizon = int(env_config.get("macro_horizon", MACRO_HORIZON))
         self.skip_policy_load = bool(env_config.get("skip_policy_load", False))
+        self.reset_free = bool(env_config.get("reset_free", False))
         self.translate_ckpt = env_config.get("translate_ckpt")
         self.reorien_ckpt = env_config.get("reorien_ckpt")
 
@@ -495,7 +496,6 @@ class swimmer_gym(MultiAgentEnv):
         self.it += 1
         self.ep_step += 1
         self.reward = 0.0
-        self.done = False
 
         # ========== 论文两步法：粗选 + RL 微调 ==========
         # 上一步（或 reset）已粗选出 aprm1/aprm2 并作为观测返回给 RL
@@ -552,6 +552,9 @@ class swimmer_gym(MultiAgentEnv):
 
         self._record_macro_step()
 
+        if self.ep_step >= self.macro_horizon:
+            self.done = True
+
         # 观测 = 新粗选结果（下一步 RL 用来决定微调方向）
         obs = self._get_obs()
         rewards = {
@@ -579,10 +582,11 @@ class swimmer_gym(MultiAgentEnv):
         return obs, rewards, dones, infos
 
     def reset(self):
-        if self.episode_count == 0:
+        if self.episode_count == 0 or not self.reset_free:
+            # 硬重置：回到初始位置（训练时默认）
             self._build_initial_geometry()
         else:
-            # reset-free：不重置位置，只重新粗选 + 更新浓度
+            # reset-free：不重置位置，只重新粗选（可视化回放时用）
             self.aprm1 = coarse_select_order(self.XY_positions1)
             self.aprm2 = coarse_select_order(self.XY_positions2)
             self.order1 = self.aprm1

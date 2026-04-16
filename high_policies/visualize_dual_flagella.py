@@ -74,6 +74,7 @@ def build_env_config(cli_args):
         "reorien_ckpt": cli_args.reorien_ckpt,
         "low_level_hold_steps": LOW_LEVEL_HOLD_STEPS,
         "macro_horizon": MACRO_HORIZON,
+        "reset_free": getattr(cli_args, 'reset_free_playback', False),
     }
 
 
