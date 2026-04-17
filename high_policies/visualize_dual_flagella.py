@@ -54,6 +54,9 @@ import numpy as np
 import ray
 import ray.rllib.algorithms.ppo as ppo
 
+from matplotlib.colors import LinearSegmentedColormap
+
+from calculate_v import compute_stokeslet_forces, evaluate_stokeslet_velocity
 from swimmer import (
     CCENTER_X,
     CCENTER_Y,
@@ -66,6 +69,8 @@ from swimmer import (
     compute_true_centroid,
     swimmer_gym,
 )
+
+FLOW_CMAP = LinearSegmentedColormap.from_list("flow_vel", ["#FFFDE7", "#FF8C00"])
 
 
 def build_env_config(cli_args):
@@ -219,6 +224,10 @@ def capture_env_frame(env, substep_index):
         "state2": np.array(env.state2, copy=True),
         "centroid1": np.array(centroid1, copy=True),
         "centroid2": np.array(centroid2, copy=True),
+        "ll_action1": np.array(env._last_ll_action1, copy=True),
+        "ll_action2": np.array(env._last_ll_action2, copy=True),
+        "xfirst1": np.array(env.Xfirst1, copy=True),
+        "xfirst2": np.array(env.Xfirst2, copy=True),
     }
 
 
@@ -257,28 +266,22 @@ def render_frame(
     ax.contourf(gx, gy, con_field, levels=con_levels, cmap="YlOrRd", alpha=0.55, extend="both")
     ax.contour(gx, gy, con_field, levels=10, colors="orange", alpha=0.5, linewidths=0.6)
 
-    # 浓度梯度流场（箭头指向浓度增大方向 = 化学源方向）
-    q_n = 14
-    qx = np.linspace(view_cx - vr * 0.9, view_cx + vr * 0.9, q_n)
-    qy = np.linspace(view_cy - vr * 0.9, view_cy + vr * 0.9, q_n)
-    qgx, qgy = np.meshgrid(qx, qy)
-    qdx = qgx - CCENTER_X
-    qdy = qgy - CCENTER_Y
-    qr2 = qdx ** 2 + qdy ** 2
-    qr = np.sqrt(qr2)
-    qr3 = np.maximum(qr2 * qr, 1e-6)
-    grad_cx = -qdx / qr3
-    grad_cy = -qdy / qr3
-    grad_mag = np.sqrt(grad_cx ** 2 + grad_cy ** 2)
-    grad_mag_safe = np.maximum(grad_mag, 1e-10)
-    arrow_scale = np.clip(grad_mag / np.percentile(grad_mag, 90), 0.15, 1.0)
-    ax.quiver(
-        qgx, qgy,
-        grad_cx / grad_mag_safe * arrow_scale,
-        grad_cy / grad_mag_safe * arrow_scale,
-        grad_mag, cmap="Blues", alpha=0.65,
-        scale=20, width=0.004, headwidth=3.5, headlength=4, zorder=2,
-    )
+    # Stokeslet 流体速度场（机器人扰动水流产生的流速箭头）
+    if "flow_data" in frame:
+        fp_x, fp_y, f_x, f_y, e_val = frame["flow_data"]
+        q_n = 16
+        qx = np.linspace(view_cx - vr * 0.95, view_cx + vr * 0.95, q_n)
+        qy = np.linspace(view_cy - vr * 0.95, view_cy + vr * 0.95, q_n)
+        qgx, qgy = np.meshgrid(qx, qy)
+        ux, uy = evaluate_stokeslet_velocity(qgx, qgy, fp_x, fp_y, f_x, f_y, e_val)
+        flow_mag = np.sqrt(ux ** 2 + uy ** 2)
+        flow_mag_safe = np.maximum(flow_mag, 1e-15)
+        ax.quiver(
+            qgx, qgy, ux / flow_mag_safe, uy / flow_mag_safe, flow_mag,
+            cmap=FLOW_CMAP, alpha=0.75, scale=28, width=0.004,
+            headwidth=3, headlength=3.5, zorder=2,
+            clim=(0, np.percentile(flow_mag, 95)),
+        )
 
     # 机器人身体
     ax.plot(frame["xy1"][:, 0], frame["xy1"][:, 1], color="tab:blue", linewidth=2.5)
@@ -438,6 +441,26 @@ def main():
                 obs_dict = env._get_obs()
             else:
                 obs_dict = env.reset()
+
+    # 预计算 Stokeslet 流场力分布（每帧独立，播放时只需做轻量网格求值）
+    total_frames = sum(len(p["frames"]) for p in all_packages)
+    print(f">>> Computing Stokeslet flow field for {total_frames} frames...")
+    computed = 0
+    for package in all_packages:
+        for frame in package["frames"]:
+            if "ll_action1" in frame and "xfirst1" in frame:
+                try:
+                    flow_data = compute_stokeslet_forces(
+                        frame["state1"], frame["ll_action1"], frame["xfirst1"],
+                        frame["state2"], frame["ll_action2"], frame["xfirst2"],
+                    )
+                    frame["flow_data"] = flow_data
+                except Exception:
+                    pass
+            computed += 1
+            if computed % 100 == 0:
+                print(f"    flow field: {computed}/{total_frames}")
+    print(f">>> Flow field done.")
 
     print(f">>> Precomputation done. {len(all_packages)} macro steps ready. Launching playback...")
 

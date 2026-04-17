@@ -21,7 +21,7 @@ ACTION_LOW = -1
 ACTION_HIGH = 1
 
 LOW_LEVEL_HOLD_STEPS = 8
-MACRO_HORIZON = 90
+MACRO_HORIZON = 210
 
 # 化学源位置
 CCENTER_X = 4.0
@@ -276,6 +276,8 @@ class swimmer_gym(MultiAgentEnv):
         self.last_centroid1 = np.zeros((2,), dtype=np.float64)
         self.last_centroid2 = np.zeros((2,), dtype=np.float64)
         self.last_substep_frames = []
+        self._last_ll_action1 = np.zeros((ENV_LINK_NUM - 1,), dtype=np.float64)
+        self._last_ll_action2 = np.zeros((ENV_LINK_NUM - 1,), dtype=np.float64)
 
         self.trace1 = deque(maxlen=1000)
         self.trace2 = deque(maxlen=1000)
@@ -449,6 +451,10 @@ class swimmer_gym(MultiAgentEnv):
             "state2": np.array(self.state2, copy=True),
             "centroid1": np.array(centroid1, copy=True),
             "centroid2": np.array(centroid2, copy=True),
+            "ll_action1": np.array(self._last_ll_action1, copy=True),
+            "ll_action2": np.array(self._last_ll_action2, copy=True),
+            "xfirst1": np.array(self.Xfirst1, copy=True),
+            "xfirst2": np.array(self.Xfirst2, copy=True),
         }
 
     def _record_macro_step(self):
@@ -515,6 +521,8 @@ class swimmer_gym(MultiAgentEnv):
         for substep_index in range(self.low_level_hold_steps):
             action1 = self._compute_low_level_action(0, self.order1)
             action2 = self._compute_low_level_action(1, self.order2)
+            self._last_ll_action1 = action1
+            self._last_ll_action2 = action2
             self._apply_dual_solver(action1, action2)
             self.low_level_step_count += 1
             self.last_substep_frames.append(self._capture_substep_frame(substep_index + 1))

@@ -570,3 +570,96 @@ def RK_dual(x1, w1, x_first1, x2, w2, x_first2):
         0.0,
         np.zeros((FORCE_POINT_NUM * 2,), dtype=np.float64),
     )
+
+
+def compute_stokeslet_forces(x1, w1, x_first1, x2, w2, x_first2):
+    """Compute Stokeslet force distribution for current robot configuration and motion."""
+    body1 = _initial_single(x1, w1, x_first1, N, NL)
+    body2 = _initial_single(x2, w2, x_first2, N, NL)
+    dense1 = _initial_single(x1, w1, x_first1, N_dense, NL)
+    dense2 = _initial_single(x2, w2, x_first2, N_dense, NL)
+
+    force_points_all = torch.cat((body1["positions"], body2["positions"]), dim=0)
+    total_points = force_points_all.shape[0]
+
+    x_match_1, z_match_1, valid_1 = build_match_points(dense1["positions"])
+    x_match_2, z_match_2, valid_2 = build_match_points(dense2["positions"])
+    x_match_all = torch.cat((x_match_1, x_match_2), dim=0)
+    z_match_all = torch.cat((z_match_1, z_match_2), dim=0)
+    valid_all = torch.cat((valid_1, valid_2), dim=0)
+
+    A = build_joint_stokeslet_matrix(
+        force_points_all, x_match_all, z_match_all, valid_all, body1["e"]
+    )
+
+    B1_mat = MatrixB(body1["L"], body1["theta"], body1["positions"])
+    B2_mat = MatrixB(body2["L"], body2["theta"], body2["positions"])
+    B_all = build_dual_B_all(B1_mat, B2_mat, total_points)
+
+    Q_single_1 = MatrixQ(
+        body1["L"], body1["theta"], body1["Qu"], body1["Q1"], body1["Ql"], body1["Q2"]
+    )
+    Q_single_2 = MatrixQ(
+        body2["L"], body2["theta"], body2["Qu"], body2["Q1"], body2["Ql"], body2["Q2"]
+    )
+    Q_total = build_dual_Q_total(Q_single_1, Q_single_2)
+
+    C1_1, C2_1 = MatrixC(body1["action_absolute"])
+    C1_2, C2_2 = MatrixC(body2["action_absolute"])
+    C1_total = _block_diag_two(C1_1, C1_2)
+    C2_total = torch.cat((C2_1, C2_2), dim=0)
+
+    AB = torch.linalg.solve(A.T, B_all.T).T
+    AB = AB[:, : Q_total.shape[0]]
+
+    MT = torch.matmul(AB, Q_total)
+    M_mat = torch.matmul(MT, C1_total)
+    R_vec = -torch.matmul(MT, C2_total)
+    rigid_vel = torch.linalg.solve(M_mat, R_vec).view(-1)
+
+    v_gen = C1_total @ rigid_vel.view(-1, 1) + C2_total
+    u_surf = Q_total @ v_gen
+
+    u_full = torch.zeros(3 * total_points, 1, dtype=torch.double, device=device)
+    u_full[: u_surf.shape[0]] = u_surf
+    forces = torch.linalg.solve(A, u_full).view(-1)
+
+    fp_x = force_points_all[:, 0].detach().cpu().numpy().copy()
+    fp_y = force_points_all[:, 1].detach().cpu().numpy().copy()
+    f_x = forces[:total_points].detach().cpu().numpy().copy()
+    f_y = forces[total_points : 2 * total_points].detach().cpu().numpy().copy()
+    e_val = float(body1["e"])
+
+    return fp_x, fp_y, f_x, f_y, e_val
+
+
+def evaluate_stokeslet_velocity(grid_x, grid_y, fp_x, fp_y, f_x, f_y, e_val):
+    """Evaluate Stokeslet-induced fluid velocity at grid points given force distribution."""
+    fp_x_3d = fp_x.reshape(-1, 1, 1)
+    fp_y_3d = fp_y.reshape(-1, 1, 1)
+    f_x_3d = f_x.reshape(-1, 1, 1)
+    f_y_3d = f_y.reshape(-1, 1, 1)
+
+    dx = grid_x[np.newaxis, :, :] - fp_x_3d
+    dy = grid_y[np.newaxis, :, :] - fp_y_3d
+
+    R = np.sqrt(dx ** 2 + dy ** 2 + e_val ** 2)
+    R_inv = 1.0 / R
+    R3_inv = R_inv ** 3
+    e2 = e_val ** 2
+
+    ux = np.sum(
+        (R_inv + e2 * R3_inv + dx * dx * R3_inv) * f_x_3d
+        + (dx * dy * R3_inv) * f_y_3d,
+        axis=0,
+    )
+    uy = np.sum(
+        (dx * dy * R3_inv) * f_x_3d
+        + (R_inv + e2 * R3_inv + dy * dy * R3_inv) * f_y_3d,
+        axis=0,
+    )
+
+    ux /= 8 * math.pi * MU
+    uy /= 8 * math.pi * MU
+
+    return ux, uy
