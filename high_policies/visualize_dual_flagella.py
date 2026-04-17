@@ -277,8 +277,8 @@ def render_frame(
         flow_mag = np.sqrt(ux ** 2 + uy ** 2)
         ax.quiver(
             qgx, qgy, ux, uy, flow_mag,
-            cmap=FLOW_CMAP, alpha=0.75, width=0.0015,
-            headwidth=3, headlength=3.5, zorder=2,
+            cmap=FLOW_CMAP, alpha=0.75, scale=10, scale_units="width",
+            width=0.0015, headwidth=3, headlength=3.5, zorder=2,
             clim=(0, np.percentile(flow_mag, 95)),
         )
 
