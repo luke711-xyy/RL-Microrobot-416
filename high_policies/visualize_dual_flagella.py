@@ -245,7 +245,7 @@ def render_frame(
 
     ax.clear()
 
-    # 浓度场等高线（同心圆热力图）
+    # 浓度场等高线（同心圆热力图）— 固定 levels 保证远近一致可见
     view_cx = 0.5 * (centroid1[0] + centroid2[0])
     view_cy = 0.5 * (centroid1[1] + centroid2[1])
     vr = ARGS.view_range
@@ -253,8 +253,32 @@ def render_frame(
     grid_y = np.linspace(view_cy - vr, view_cy + vr, 120)
     gx, gy = np.meshgrid(grid_x, grid_y)
     con_field = 1.0 / np.sqrt((gx - CCENTER_X) ** 2 + (gy - CCENTER_Y) ** 2)
-    ax.contourf(gx, gy, con_field, levels=20, cmap="YlOrRd", alpha=0.3)
-    ax.contour(gx, gy, con_field, levels=8, colors="orange", alpha=0.4, linewidths=0.5)
+    con_levels = np.linspace(0.05, 2.0, 40)
+    ax.contourf(gx, gy, con_field, levels=con_levels, cmap="YlOrRd", alpha=0.55, extend="both")
+    ax.contour(gx, gy, con_field, levels=10, colors="orange", alpha=0.5, linewidths=0.6)
+
+    # 浓度梯度流场（箭头指向浓度增大方向 = 化学源方向）
+    q_n = 14
+    qx = np.linspace(view_cx - vr * 0.9, view_cx + vr * 0.9, q_n)
+    qy = np.linspace(view_cy - vr * 0.9, view_cy + vr * 0.9, q_n)
+    qgx, qgy = np.meshgrid(qx, qy)
+    qdx = qgx - CCENTER_X
+    qdy = qgy - CCENTER_Y
+    qr2 = qdx ** 2 + qdy ** 2
+    qr = np.sqrt(qr2)
+    qr3 = np.maximum(qr2 * qr, 1e-6)
+    grad_cx = -qdx / qr3
+    grad_cy = -qdy / qr3
+    grad_mag = np.sqrt(grad_cx ** 2 + grad_cy ** 2)
+    grad_mag_safe = np.maximum(grad_mag, 1e-10)
+    arrow_scale = np.clip(grad_mag / np.percentile(grad_mag, 90), 0.15, 1.0)
+    ax.quiver(
+        qgx, qgy,
+        grad_cx / grad_mag_safe * arrow_scale,
+        grad_cy / grad_mag_safe * arrow_scale,
+        grad_mag, cmap="Blues", alpha=0.65,
+        scale=20, width=0.004, headwidth=3.5, headlength=4, zorder=2,
+    )
 
     # 机器人身体
     ax.plot(frame["xy1"][:, 0], frame["xy1"][:, 1], color="tab:blue", linewidth=2.5)
