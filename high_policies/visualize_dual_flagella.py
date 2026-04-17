@@ -269,16 +269,15 @@ def render_frame(
     # Stokeslet 流体速度场（机器人扰动水流产生的流速箭头）
     if "flow_data" in frame:
         fp_x, fp_y, f_x, f_y, e_val = frame["flow_data"]
-        q_n = 16
+        q_n = 32
         qx = np.linspace(view_cx - vr * 0.95, view_cx + vr * 0.95, q_n)
         qy = np.linspace(view_cy - vr * 0.95, view_cy + vr * 0.95, q_n)
         qgx, qgy = np.meshgrid(qx, qy)
         ux, uy = evaluate_stokeslet_velocity(qgx, qgy, fp_x, fp_y, f_x, f_y, e_val)
         flow_mag = np.sqrt(ux ** 2 + uy ** 2)
-        flow_mag_safe = np.maximum(flow_mag, 1e-15)
         ax.quiver(
-            qgx, qgy, ux / flow_mag_safe, uy / flow_mag_safe, flow_mag,
-            cmap=FLOW_CMAP, alpha=0.75, scale=28, width=0.004,
+            qgx, qgy, ux, uy, flow_mag,
+            cmap=FLOW_CMAP, alpha=0.75, width=0.0015,
             headwidth=3, headlength=3.5, zorder=2,
             clim=(0, np.percentile(flow_mag, 95)),
         )
