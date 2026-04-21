@@ -287,27 +287,63 @@ def render_frame(
     ax.imshow(
         vort,
         extent=(view_cx - vr, view_cx + vr, view_cy - vr, view_cy + vr),
-        origin="lower", cmap="RdBu_r", vmin=-vmax, vmax=vmax,
+        origin="lower", cmap="RdBu", vmin=-vmax, vmax=vmax,
         alpha=0.45, zorder=0,
     )
 
-    # 涡流流线（细灰线）展示涡胞结构
-    s_n = 30
-    sx = np.linspace(view_cx - vr, view_cx + vr, s_n)
-    sy = np.linspace(view_cy - vr, view_cy + vr, s_n)
-    sgx, sgy = np.meshgrid(sx, sy)
-    sux, suy = vortex_velocity(sgx, sgy)
-    ax.streamplot(sgx, sgy, sux, suy, color="#444444", linewidth=0.4, density=1.2, arrowsize=0.6, zorder=1)
+    # 涡胞中心旋转方向标记（同心圆弧箭头）
+    L_v = VORTEX_CELL_L
+    r_arc = 0.3 * L_v
+    nx_lo = int(np.floor((view_cx - vr) / L_v))
+    nx_hi = int(np.ceil((view_cx + vr) / L_v))
+    ny_lo = int(np.floor((view_cy - vr) / L_v))
+    ny_hi = int(np.ceil((view_cy + vr) / L_v))
+    for _nx in range(nx_lo, nx_hi):
+        for _ny in range(ny_lo, ny_hi):
+            ccx = (_nx + 0.5) * L_v
+            ccy = (_ny + 0.5) * L_v
+            omega = vortex_vorticity(ccx, ccy)
+            if abs(omega) < 1e-12:
+                continue
+            if omega > 0:
+                angles = np.linspace(np.radians(20), np.radians(340), 50)
+            else:
+                angles = np.linspace(np.radians(340), np.radians(20), 50)
+            arc_x = ccx + r_arc * np.cos(angles)
+            arc_y = ccy + r_arc * np.sin(angles)
+            ax.plot(arc_x, arc_y, color="#444444", lw=0.8, alpha=0.6, zorder=1)
+            ax.annotate(
+                "", xy=(arc_x[-1], arc_y[-1]), xytext=(arc_x[-4], arc_y[-4]),
+                arrowprops=dict(arrowstyle="->,head_width=0.2,head_length=0.15",
+                                color="#444444", lw=0.8),
+                zorder=1,
+            )
 
     con_field = 1.0 / np.sqrt((gx - CCENTER_X) ** 2 + (gy - CCENTER_Y) ** 2)
     con_levels = np.linspace(0.05, 2.0, 40)
     ax.contourf(gx, gy, con_field, levels=con_levels, cmap="YlOrRd", alpha=0.35, extend="both")
     ax.contour(gx, gy, con_field, levels=10, colors="orange", alpha=0.45, linewidths=0.6)
+    
+    # 涡流流线（细灰线）展示涡胞结构
+    '''
+    _n = 16
+    sx = np.linspace(view_cx - vr, view_cx + vr, s_n)
+    sy = np.linspace(view_cy - vr, view_cy + vr, s_n)
+    sgx, sgy = np.meshgrid(sx, sy)
+    sux, suy = vortex_velocity(sgx, sgy)
+    ax.quiver(sgx, sgy, sux, suy, color="#444444", alpha=0.5, scale=0.15, scale_units="width", width=0.002, zorder=1)
+
+    con_field = 1.0 / np.sqrt((gx - CCENTER_X) ** 2 + (gy - CCENTER_Y) ** 2)
+    con_levels = np.linspace(0.05, 2.0, 40)
+    ax.contourf(gx, gy, con_field, levels=con_levels, cmap="YlOrRd", alpha=0.35, extend="both")
+    ax.contour(gx, gy, con_field, levels=10, colors="orange", alpha=0.45, linewidths=0.6)
+    '''
+
 
     # Stokeslet 流体速度场（机器人扰动水流产生的流速箭头）
     if "flow_data" in frame:
         fp_x, fp_y, f_x, f_y, e_val = frame["flow_data"]
-        q_n = 32
+        q_n = 64
         qx = np.linspace(view_cx - vr * 0.95, view_cx + vr * 0.95, q_n)
         qy = np.linspace(view_cy - vr * 0.95, view_cy + vr * 0.95, q_n)
         qgx, qgy = np.meshgrid(qx, qy)
@@ -315,7 +351,7 @@ def render_frame(
         flow_mag = np.sqrt(ux ** 2 + uy ** 2)
         ax.quiver(
             qgx, qgy, ux, uy, flow_mag,
-            cmap=FLOW_CMAP, alpha=0.75, scale=10, scale_units="width",
+            cmap=FLOW_CMAP, alpha=0.75, scale=1.5, scale_units="width",
             width=0.0015, headwidth=3, headlength=3.5, zorder=2,
             clim=(0, np.percentile(flow_mag, 95)),
         )

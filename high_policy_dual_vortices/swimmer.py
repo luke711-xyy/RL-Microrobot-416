@@ -34,7 +34,7 @@ ROBOT2_INIT = (2.0, 0.0)
 ROBOT_IDS = ("robot_1", "robot_2")
 
 # 背景涡流（Taylor-Green 细胞涡流）参数；可被环境变量覆盖
-VORTEX_STRENGTH = float(os.environ.get("VORTEX_STRENGTH", "0.01"))
+VORTEX_STRENGTH = float(os.environ.get("VORTEX_STRENGTH", "0.1"))
 VORTEX_CELL_L = float(os.environ.get("VORTEX_CELL_L", "1.0"))
 
 # 策略系统：2 个底层策略 × 变换 = 6 种行为

@@ -37,7 +37,7 @@ torch.set_num_threads(int(os.environ.get("STOKES_NUM_THREADS", "5")))
 
 # ================= 背景涡流（Taylor-Green 细胞涡流） =================
 
-VORTEX_STRENGTH = float(os.environ.get("VORTEX_STRENGTH", "0.01"))
+VORTEX_STRENGTH = float(os.environ.get("VORTEX_STRENGTH", "0.1"))
 VORTEX_CELL_L = float(os.environ.get("VORTEX_CELL_L", "1.0"))
 
 
@@ -57,7 +57,7 @@ def vortex_vorticity(x, y, Uv=None, Lv=None):
     Uv = VORTEX_STRENGTH if Uv is None else Uv
     Lv = VORTEX_CELL_L if Lv is None else Lv
     k = math.pi / Lv
-    return -2.0 * Uv * k * np.sin(k * x) * np.sin(k * y)
+    return 2.0 * Uv * k * np.sin(k * x) * np.sin(k * y)
 
 
 def MatrixQ(L, theta, Qu, Q1, Ql, Q2):
