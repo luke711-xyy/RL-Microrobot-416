@@ -145,7 +145,7 @@ def build_ppo_config(cli_args):
     config["use_gae"] = True
     config["lambda_"] = 0.95
     config["kl_coeff"] = 0.2
-    config["sgd_minibatch_size"] = 60
+    config["sgd_minibatch_size"] = 100
     config["train_batch_size"] = 300
     config["num_sgd_iter"] = 5
     config["shuffle_sequences"] = True

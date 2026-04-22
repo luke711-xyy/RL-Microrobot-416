@@ -39,7 +39,7 @@ device = torch.device('cpu')
 NL=10
 N_dense=int(NL*8)
 N=int(NL*4)
-torch.set_num_threads(5)
+torch.set_num_threads(3)
 
 Fila_point_num=Xf_all_fila.shape[0]
 

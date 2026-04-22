@@ -26,7 +26,7 @@ policy_dir_name = f"{timestamp}_policy_{POLICY_ID}"
 cwd = os.path.join(os.getcwd(), policy_dir_name)
 cwd2 = os.path.join(os.getcwd(),"policy/checkpoint_000000/checkpoint-0")
 print(os.getcwd())
-ray.init(ignore_reinit_error=True, num_cpus=5)
+ray.init(ignore_reinit_error=True, num_cpus=3)
 # trainer = ppo.PPOTrainer(env=swimmer_gym, config={
 #     "env_config": {},  # config to pass to env class
 # })

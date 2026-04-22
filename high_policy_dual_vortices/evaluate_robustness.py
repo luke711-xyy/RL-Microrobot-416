@@ -15,14 +15,14 @@ def parse_args():
     parser.add_argument("--checkpoint", type=str, required=True, help="Senior-policy checkpoint path")
     parser.add_argument("--policy_type", type=str, required=True, choices=["dual", "shared", "single"],
                         help="dual=2 policies, shared=1 policy for both, single=joint centralized policy")
-    parser.add_argument("--num_trials", type=int, default=30, help="Trials per Uv value (default: 30)")
-    parser.add_argument("--uv_values", type=str, default="0.0,0.005,0.01,0.02,0.03,0.05,0.07,0.1",
+    parser.add_argument("--num_trials", type=int, default=10, help="Trials per Uv value (default: 10)")
+    parser.add_argument("--uv_values", type=str, default="0.0,0.01,0.02,0.03,0.05,0.07,0.1",
                         help="Comma-separated Uv values to test")
-    parser.add_argument("--success_radius", type=float, default=1.0, help="Distance threshold for success (default: 1.0)")
-    parser.add_argument("--steps", type=int, default=200, help="Macro steps per trial (default: 200)")
+    parser.add_argument("--success_radius", type=float, default=0.5, help="Distance threshold for success (default: 1.0)")
+    parser.add_argument("--steps", type=int, default=100, help="Macro steps per trial (default: 200)")
     parser.add_argument("--num_cpus", type=int, default=1)
     parser.add_argument("--num_threads", type=int, default=1)
-    parser.add_argument("--view_range", type=float, default=8.0, help="Half-width of scatter plot view (default: 8.0)")
+    parser.add_argument("--view_range", type=float, default=6.0, help="Half-width of scatter plot view (default: 8.0)")
     parser.add_argument("--no_plot", action="store_true", help="Skip figure generation, only print table")
     return parser.parse_args()
 
@@ -240,31 +240,38 @@ def random_start_positions():
 # ==================== 绘图 ====================
 
 def plot_results(results, uv_values, policy_type, success_radius):
-    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(16, 7),
-                                             gridspec_kw={"width_ratios": [1.2, 1]})
+    from matplotlib.colors import Normalize
+    import matplotlib.cm as cm
 
-    # 左图：取最大非零 Uv 的散点
-    nonzero_uvs = [uv for uv in uv_values if uv > 0 and uv in results]
-    plot_uv = max(nonzero_uvs) if nonzero_uvs else uv_values[-1]
-    trials = results[plot_uv]
+    from matplotlib.colors import LinearSegmentedColormap
+    uv_max = max(uv_values) if max(uv_values) > 0 else 0.1
+    norm = Normalize(vmin=0.0, vmax=uv_max)
+    base_cmap = cm.get_cmap("Blues")
+    cmap_markers = LinearSegmentedColormap.from_list(
+        "Blues_trunc", base_cmap(np.linspace(0.35, 1.0, 256))
+    )
+
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(16, 8),
+                                             gridspec_kw={"width_ratios": [1.2, 1]})
 
     vr = ARGS.view_range
     cx, cy = TARGET
+    L_v = VORTEX_CELL_L
+    bg_uv = uv_max
 
     # 涡度背景
     v_n = 200
     vx_arr = np.linspace(cx - vr, cx + vr, v_n)
     vy_arr = np.linspace(cy - vr, cy + vr, v_n)
     vgx, vgy = np.meshgrid(vx_arr, vy_arr)
-    vort = vortex_vorticity(vgx, vgy, Uv=plot_uv)
-    L_v = VORTEX_CELL_L
-    vmax = 2.0 * math.pi * plot_uv / L_v
+    vort = vortex_vorticity(vgx, vgy, Uv=bg_uv)
+    vmax = 2.0 * math.pi * bg_uv / L_v
     if vmax > 0:
         ax_left.imshow(
             vort,
             extent=(cx - vr, cx + vr, cy - vr, cy + vr),
             origin="lower", cmap="RdBu", vmin=-vmax, vmax=vmax,
-            alpha=0.45, zorder=0,
+            alpha=0.35, zorder=0,
         )
 
     # 涡胞旋转方向标记
@@ -277,7 +284,7 @@ def plot_results(results, uv_values, policy_type, success_radius):
         for _ny in range(ny_lo, ny_hi):
             ccx = (_nx + 0.5) * L_v
             ccy = (_ny + 0.5) * L_v
-            omega = vortex_vorticity(ccx, ccy, Uv=plot_uv)
+            omega = vortex_vorticity(ccx, ccy, Uv=bg_uv)
             if abs(omega) < 1e-12:
                 continue
             if omega > 0:
@@ -300,7 +307,7 @@ def plot_results(results, uv_values, policy_type, success_radius):
     gx, gy = np.meshgrid(grid_x, grid_y)
     con_field = 1.0 / np.sqrt((gx - cx) ** 2 + (gy - cy) ** 2)
     con_levels = np.linspace(0.05, 2.0, 40)
-    ax_left.contourf(gx, gy, con_field, levels=con_levels, cmap="YlOrRd", alpha=0.3, extend="both")
+    ax_left.contourf(gx, gy, con_field, levels=con_levels, cmap="YlOrRd", alpha=0.25, extend="both")
 
     # 起始距离参考圆
     theta_circle = np.linspace(0, 2 * np.pi, 200)
@@ -308,28 +315,43 @@ def plot_results(results, uv_values, policy_type, success_radius):
                  cy + START_DIST * np.sin(theta_circle),
                  'k--', lw=0.8, alpha=0.4, zorder=2)
 
-    # 终点散点
-    for trial in trials:
-        for key, marker_size in [("final_r1", 50), ("final_r2", 50)]:
-            pos = trial[key]
-            success_key = "success_r1" if key == "final_r1" else "success_r2"
-            color = "tab:cyan" if trial[success_key] else "tab:red"
-            ax_left.scatter(pos[0], pos[1], c=color, marker="x", s=marker_size,
-                           linewidths=1.2, alpha=0.7, zorder=5)
+    # 成功范围圆
+    ax_left.plot(cx + success_radius * np.cos(theta_circle),
+                 cy + success_radius * np.sin(theta_circle),
+                 'g-', lw=1.2, alpha=0.6, zorder=3, label=f"success r={success_radius}")
+
+    # 所有 Uv 的所有试验终点散点：成功=空心圆，败=×
+    for uv in sorted(results.keys()):
+        for trial in results[uv]:
+            color = cmap_markers(max(norm(uv), 0.2))
+            for rkey, skey in [("final_r1", "success_r1"), ("final_r2", "success_r2")]:
+                pos = trial[rkey]
+                if trial[skey]:
+                    ax_left.scatter(pos[0], pos[1], marker="o", s=80, linewidths=3.0,
+                                    facecolors="none", edgecolors=[color], alpha=0.8, zorder=11)
+                else:
+                    ax_left.scatter(pos[0], pos[1], marker="x", s=80, linewidths=3.0,
+                                    c=[color], alpha=0.8, zorder=11)
 
     # 化学源标记
-    ax_left.scatter([cx], [cy], color="gold", s=200, marker="*",
-                    edgecolors="black", linewidths=0.8, zorder=10)
+    ax_left.scatter([cx], [cy], color="gold", s=120, marker="*",
+                    edgecolors="black", linewidths=0.5, zorder=10)
+
+    # colorbar
+    sm = cm.ScalarMappable(cmap=cmap_markers, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax_left, shrink=0.75, pad=0.02)
+    cbar.set_label(r"$U_v / U$", fontsize=12)
 
     ax_left.set_xlim(cx - vr, cx + vr)
     ax_left.set_ylim(cy - vr, cy + vr)
     ax_left.set_aspect("equal")
     ax_left.set_xlabel("x / L")
     ax_left.set_ylabel("y / L")
-    ax_left.set_title(f"Endpoints at Uv = {plot_uv:.4f}  ({policy_type} policy)")
+    ax_left.set_title(f"Endpoints ({policy_type} policy)")
     ax_left.grid(True, alpha=0.15)
 
-    # 右图：成功率曲线
+    # 右图：y=Uv, x=Success rate（与论文一致）
     uv_plot = []
     rate_plot = []
     for uv in sorted(results.keys()):
@@ -340,10 +362,11 @@ def plot_results(results, uv_values, policy_type, success_radius):
         uv_plot.append(uv)
         rate_plot.append(rate)
 
-    ax_right.plot(uv_plot, rate_plot, "ko-", markersize=6, linewidth=1.5)
-    ax_right.set_ylim(-0.05, 1.05)
-    ax_right.set_xlabel("Uv")
-    ax_right.set_ylabel("Success rate")
+    ax_right.plot(rate_plot, uv_plot, "k-o", markersize=6, linewidth=1.5,
+                  markerfacecolor="white", markeredgecolor="black", markeredgewidth=1.2)
+    ax_right.set_xlim(-0.05, 1.05)
+    ax_right.set_xlabel("Success rate")
+    ax_right.set_ylabel(r"$U_v / U$")
     ax_right.set_title(f"Robustness ({policy_type} policy)")
     ax_right.grid(True, alpha=0.3)
 
@@ -425,9 +448,12 @@ def main():
                          (env.last_centroid1[1] - TARGET[1]) ** 2)
             d2 = np.sqrt((env.last_centroid2[0] - TARGET[0]) ** 2 +
                          (env.last_centroid2[1] - TARGET[1]) ** 2)
+            print(f"    trial {trial_idx}: R1 pos=({env.last_centroid1[0]:.4f},{env.last_centroid1[1]:.4f}) d1={d1:.4f} | "
+                  f"R2 pos=({env.last_centroid2[0]:.4f},{env.last_centroid2[1]:.4f}) d2={d2:.4f} | "
+                  f"radius={ARGS.success_radius} → R1={'OK' if d1 < ARGS.success_radius else 'FAIL'}, R2={'OK' if d2 < ARGS.success_radius else 'FAIL'}")
             trials.append({
-                "success_r1": d1 < ARGS.success_radius,
-                "success_r2": d2 < ARGS.success_radius,
+                "success_r1": bool(d1 < ARGS.success_radius),
+                "success_r2": bool(d2 < ARGS.success_radius),
                 "final_r1": np.array(env.last_centroid1, copy=True),
                 "final_r2": np.array(env.last_centroid2, copy=True),
                 "start_r1": r1_init,

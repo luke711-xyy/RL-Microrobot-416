@@ -379,7 +379,7 @@ class swimmer_gym(gym.Env):
         self.reward=0
         
 
-        self.order=0
+        self.order=1
 
 
            
